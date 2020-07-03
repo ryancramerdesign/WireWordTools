@@ -1,0 +1,272 @@
+<?php namespace ProcessWire;
+
+/**
+ * ProcessWire Word Tools module (EN)
+ * 
+ * API methods for English word inflection and lemmatisation, plus ability to use them in search queries.
+ *
+ * © 2020 by Ryan Cramer
+ * 
+ * @property int $useHook
+ * @method bool isSingular($word)
+ * 
+ */
+class WireWordTools extends WireData implements Module, ConfigurableModule {
+	
+	public static function getModuleInfo() {
+		return array(
+			'title' => 'Wire Word Tools (EN)',
+			'version' => 1,
+			'summary' => 'API methods for English word inflection, lemmatisation and stemming, plus ability to use them in search queries.',
+			'requires' => 'ProcessWire>=3.0.148',
+			'author' => 'Ryan Cramer',
+			'autoload' => true,
+		);
+	}
+	
+	/**
+	 * @var WireEnglishInflector|null
+	 * 
+	 */
+	protected $inflector = null;
+
+	/**
+	 * @var WireEnglishLemmatizer|null
+	 * 
+	 */
+	protected $lemmatizer = null;
+
+	/**
+	 * Construct
+	 * 
+	 */
+	public function __construct() {
+		$this->set('useHook', 1);
+		parent::__construct();
+	}
+
+	/**
+	 * API ready
+	 * 
+	 * Hook to ProcessWire’s $sanitizer->getTextTools()->getWordAlternates($word) method
+	 * which is used by "query expansion" searches in ProcessWire 3.0.162.
+	 * 
+	 */
+	public function ready() {
+		$useHook = (int) $this->useHook;
+		if(!$useHook) return;
+		$languages = $this->wire()->languages;
+		if($languages && $this->wire()->user->language->id !== $useHook) return;
+		$this->wire()->addHookAfter('WireTextTools::wordAlternates', $this, 'hookWordAlternates');
+	}
+
+	/**
+	 * Is word plural?
+	 * 
+	 * @param string $word
+	 * @return bool
+	 * 
+	 */
+	public function isPlural($word) {
+		return $this->inflector()->isPlural($word);
+	}
+
+	/**
+	 * Is word singular?
+	 *
+	 * @param string $word
+	 * @return bool
+	 *
+	 */
+	public function ___isSingular($word) {
+		// hookable to avoid collision with Module::isSingular interface method
+		return $this->inflector()->isSingular($word);
+	}
+
+	/**
+	 * Get plural word from singular word
+	 *
+	 * @param string $word
+	 * @return bool
+	 *
+	 */
+	public function getPlural($word) {
+		return $this->inflector()->getPlural($word);
+	}
+
+	/**
+	 * Get singular word from plural word
+	 *
+	 * @param string $word
+	 * @return bool
+	 *
+	 */
+	public function getSingular($word) {
+		return $this->inflector()->getSingular($word);
+	}
+
+	/**
+	 * Get lemma for given word
+	 *
+	 * @param string $word
+	 * @return bool
+	 *
+	 */
+	public function getLemma($word) {
+		return $this->lemmatizer()->getLemma($word);
+	}
+
+	/**
+	 * Get related/alternate words for given word
+	 * 
+	 * @param string $word
+	 * @param bool $inclusive Also include the given word in return value if found to be valid? (default=false)
+	 * @return array
+	 * 
+	 */
+	public function getWords($word, $inclusive = false) {
+		return $this->lemmatizer()->getWords($word, $inclusive);
+	}
+
+	/**
+	 * @return WireEnglishInflector
+	 * 
+	 */
+	public function inflector() {
+		if($this->inflector === null) {
+			require_once(__DIR__ . '/WireEnglishInflector.php');
+			$this->inflector = $this->wire(new WireEnglishInflector());
+		}
+		return $this->inflector;
+	}
+	
+	/**
+	 * @return WireEnglishLemmatizer
+	 *
+	 */
+	public function lemmatizer() {
+		if($this->lemmatizer === null) {
+			require_once(__DIR__ . '/WireEnglishLemmatizer.php');
+			$this->lemmatizer = $this->wire(new WireEnglishLemmatizer());
+		}
+		return $this->lemmatizer;
+	}
+	
+	public function get($key) {
+		if($key === 'lemmatizer') return $this->lemmatizer();
+		if($key === 'inflector') return $this->inflector();
+		return parent::get($key);
+	}
+
+	/**
+	 * Hook to WireTextTools::wordAlternates (PW 3.0.162+)
+	 * 
+	 * @param HookEvent $event
+	 * 
+	 */
+	public function hookWordAlternates(HookEvent $event) {
+		/** @var string $word */
+		$word = $event->arguments(0);
+		/** @var array $words */
+		$words = $event->return;
+		if(empty($word) || !ctype_alnum($word)) return;
+		if(!is_array($words)) $words = array();
+		$lemma = $this->getLemma($word); 
+		if($word !== $lemma) $words[] = $lemma;
+		$words = array_merge($words, $this->lemmatizer()->getWordsFromLemma($lemma)); 
+		if($word === $lemma) {
+			$plural = $this->isPlural($word) ? $word : $this->getPlural($word);
+			$singular = $plural === $word ? $this->getSingular($word) : $word;
+		} else {
+			$plural = $this->getPlural($lemma);
+			$singular = $this->getSingular($plural);
+		}
+		if(!in_array($plural, $words)) $words[] = $plural;
+		if(!in_array($singular, $words)) $words[] = $singular;
+		$event->return = $words;
+	}
+	
+	
+
+	/**
+	 * Module config
+	 * 
+	 * @param InputfieldWrapper $inputfields
+	 *
+	 */
+	public function getModuleConfigInputfields(InputfieldWrapper $inputfields) {
+		
+		$languages = $this->wire()->languages;
+		if($languages) {
+			/** @var InputfieldRadios $f */
+			$f = $this->wire()->modules->get('InputfieldRadios');
+			$f->description = 'To enable, select the language that represents EN (English)';
+			if("$this->useHook" === "1") $this->useHook = 0;
+			foreach($languages as $language) {
+				$f->addOption($language->id, $language->get('title|name'));
+			}
+			$f->addOption(0, 'Disabled');
+			$f->optionColumns = 1;
+			$f->val((int) $this->useHook);
+		} else {
+			/** @var InputfieldToggle $f */
+			$f = $this->wire()->modules->get('InputfieldToggle');
+			$f->val($this->useHook ? 1 : 0);
+		}
+		$f->attr('name', 'useHook');
+		$f->label = 'Automatically provide EN word alternates to relevant search queries?';
+		$f->notes = 'This feature requires ProcessWire 3.0.162+';
+		$inputfields->add($f);
+
+		$actions = array(
+			'words' => 'getWords',
+			'lemma' => 'getLemma',
+			'singular' => 'getSingular',
+			'plural' => 'getPlural',
+		);
+		
+		$action = $this->wire()->input->post('_action');
+		$words = $this->wire()->input->post->text('_words');
+		$results = array();
+
+		if($action && $words && isset($actions[$action])) {
+			$words = preg_replace('/[^a-zA-Z0-9]/', ' ', $words);
+			$words = explode(' ', $words);
+			foreach($words as $key => $word) {
+				if(empty($word)) continue;
+				$words[$key] = $word;
+				$method = $actions[$action];
+				$result = $this->$method($word);
+				if(is_array($result)) $result = implode(', ', $result);
+				$result = "$method('$word') = $result";
+				$this->warning($result, Notice::noGroup);
+				$results[] = $result;
+			}
+			$this->wire()->session->setFor($this, 'results', $results);
+		} else {
+			$results = $this->wire()->session->getFor($this, 'results');
+		}
+		
+		$fs = $this->wire()->modules->get('InputfieldFieldset');
+		$fs->attr('name', '_test_words');
+		$fs->label = 'Test word functions';
+		if(count($results)) $fs->description = implode("\n", $results);
+		$inputfields->add($fs);
+		
+		/** @var InputfieldSelect $f */
+		$f = $this->wire()->modules->get('InputfieldSelect'); 
+		$f->attr('id+name', '_action');
+		$f->label = 'Select function to test';
+		$f->addOptions($actions);
+		$f->columnWidth = 50;
+		$fs->add($f);
+	
+		/** @var InputfieldText $f */
+		$f = $this->wire()->modules->get('InputfieldText'); 
+		$f->attr('name', '_words'); 
+		$f->label = 'Enter one or more words to test';
+		$f->columnWidth = 50;
+		$f->showIf = '_action!=""';
+		$fs->add($f);
+	}
+}
