@@ -250,7 +250,7 @@ class WireWordTools extends WireData implements Module, ConfigurableModule {
 		$fs = $this->wire()->modules->get('InputfieldFieldset');
 		$fs->attr('name', '_test_words');
 		$fs->label = 'Test word functions';
-		if(count($results)) $fs->description = implode("\n", $results);
+		if(!empty($results) && count($results)) $fs->description = implode("\n", $results);
 		$inputfields->add($fs);
 		
 		/** @var InputfieldSelect $f */
